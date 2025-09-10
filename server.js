@@ -10,15 +10,22 @@ const WhatsAppService = require('./services/whatsappService');
 
 const app = express();
 const server = http.createServer(app);
+
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5174,https://balagh-admin.vercel.app')
+  .split(',')
+  .map(s => s.trim());
+
 const io = new Server(server, {
   cors: {
-    origin: "https://balagh-admin.vercel.app", // Your React app URL
-    methods: ["GET", "POST"]
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.options('*', cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
