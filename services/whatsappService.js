@@ -5,6 +5,26 @@ const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
 
+// Add this helper to auto-find a Chrome/Chromium binary in Railway
+function resolveChromeExecutable() {
+  const envPath = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH;
+  const candidates = [
+    envPath,
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome'
+  ].filter(Boolean);
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch (_) {}
+  }
+  // Fall back to Puppeteer's bundled Chromium (if present)
+  return undefined;
+}
+
+
 class WhatsAppService {
   constructor(io) {
     this.io = io;
@@ -90,13 +110,13 @@ class WhatsAppService {
       const client = new Client({
         authStrategy: new LocalAuth({ 
           clientId: sessionId,
-          dataPath: this.authDir
+          dataPath: this.authDir // Custom path for session data
         }),
         puppeteer: {
           headless: true,
           executablePath: resolveChromeExecutable(),
           args: [
-            '--no-sandbox',
+            '--no-sandbox', 
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
@@ -109,7 +129,6 @@ class WhatsAppService {
           ]
         }
       });
-
       // Store client reference
       this.clients.set(sessionId, client);
       console.log(`🗂️ Client stored with sessionId: ${sessionId}. Active clients: ${this.clients.size}`);
