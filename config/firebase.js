@@ -17,7 +17,7 @@ const initializeFirebase = () => {
       "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
       "client_x509_cert_url": `https://www.googleapis.com/robot/v1/metadata/x509/${process.env.FIREBASE_CLIENT_EMAIL}`
     };
-
+ 
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
       databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com/`
