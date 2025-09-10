@@ -7,6 +7,6 @@
   healthcheckTimeout = 300
 
 [env]
-NODE_ENV = "production"
-CORS_ORIGINS = "http://localhost:5174,https://balagh-admin.vercel.app"
-PUPPETEER_EXECUTABLE_PATH = "/usr/bin/chromium"
+  NODE_ENV = "production"
+  CORS_ORIGINS = "http://localhost:5174,https://balagh-admin.vercel.app"
+  CHROME_BIN = "/usr/bin/chromium-browser"

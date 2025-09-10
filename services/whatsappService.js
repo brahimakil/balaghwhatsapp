@@ -88,17 +88,21 @@ class WhatsAppService {
       const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 
       const client = new Client({
-        authStrategy: new LocalAuth({ clientId: sessionId, dataPath: this.authDir }),
+        authStrategy: new LocalAuth({ 
+          clientId: sessionId,
+          dataPath: this.authDir
+        }),
         puppeteer: {
           headless: true,
-          executablePath: chromiumPath,
+          executablePath: resolveChromeExecutable(),
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-zygote',
+            '--disable-accelerated-2d-canvas',
             '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu',
             '--disable-background-timer-throttling',
             '--disable-backgrounding-occluded-windows',
             '--disable-renderer-backgrounding'

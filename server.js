@@ -11,6 +11,7 @@ const WhatsAppService = require('./services/whatsappService');
 const app = express();
 const server = http.createServer(app);
 
+// CORS: allow multiple origins (localhost + Vercel) via env
 const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5174,https://balagh-admin.vercel.app')
   .split(',')
   .map(s => s.trim());
@@ -18,10 +19,15 @@ const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5174,https
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
-    methods: ['GET', 'POST'],
+    methods: ["GET", "POST"],
     credentials: true
   }
 });
+
+// Middleware
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.options('*', cors({ origin: allowedOrigins, credentials: true }));
+app.use(express.json());
 
 // Middleware
 app.use(cors({ origin: allowedOrigins, credentials: true }));
