@@ -1,0 +1,10 @@
+[build]
+  builder = "nixpacks"
+
+[deploy]
+  restartPolicyType = "always"
+  healthcheckPath = "/health"
+  healthcheckTimeout = 300
+
+[env]
+  NODE_ENV = "production"
