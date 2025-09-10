@@ -9,4 +9,4 @@
 [env]
   NODE_ENV = "production"
   CORS_ORIGINS = "http://localhost:5174,https://balagh-admin.vercel.app"
-  CHROME_BIN = "/usr/bin/chromium-browser"
+  CHROME_BIN = "/usr/bin/chromium"

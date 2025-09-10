@@ -5,23 +5,19 @@ const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
 
-// Add this helper to auto-find a Chrome/Chromium binary in Railway
 function resolveChromeExecutable() {
   const envPath = process.env.CHROME_BIN || process.env.PUPPETEER_EXECUTABLE_PATH;
   const candidates = [
     envPath,
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
+    '/usr/bin/chromium',               // apt chromium (works on Railway)
     '/usr/bin/google-chrome-stable',
     '/usr/bin/google-chrome'
+    // DO NOT use '/usr/bin/chromium-browser' → snap wrapper
   ].filter(Boolean);
   for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch (_) {}
+    try { if (fs.existsSync(p)) return p; } catch (_) {}
   }
-  // Fall back to Puppeteer's bundled Chromium (if present)
-  return undefined;
+  return undefined; // fall back to puppeteer’s bundled if present
 }
 
 
@@ -108,21 +104,17 @@ class WhatsAppService {
       const chromiumPath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 
       const client = new Client({
-        authStrategy: new LocalAuth({ 
-          clientId: sessionId,
-          dataPath: this.authDir // Custom path for session data
-        }),
+        authStrategy: new LocalAuth({ clientId: sessionId, dataPath: this.authDir }),
         puppeteer: {
           headless: true,
           executablePath: resolveChromeExecutable(),
           args: [
-            '--no-sandbox', 
+            '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
             '--disable-gpu',
+            '--no-zygote',
+            '--no-first-run',
             '--disable-background-timer-throttling',
             '--disable-backgrounding-occluded-windows',
             '--disable-renderer-backgrounding'
