@@ -9,18 +9,21 @@ class SimpleWhatsAppService {
   constructor(io) {
     this.io = io;
     this.client = null;
-    this.db = null;
+    this.db = null; // Initialize as null
     this.sessionId = 'simple_session';
     this.isConnected = false;
-    this.keepAliveInterval = null; // Add this
+    this.keepAliveInterval = null;
     this.contactsSynced = false;
+    
+    // Initialize database immediately
+    this.initializeDatabase();
     
     // Create auth directory
     this.authDir = path.join(__dirname, '../auth_sessions');
     if (!fs.existsSync(this.authDir)) {
       fs.mkdirSync(this.authDir, { recursive: true });
     }
-
+    
     // Auto-restore session on startup
     this.autoRestore();
   }
@@ -249,6 +252,10 @@ class SimpleWhatsAppService {
   // 📇 GET ALL CONTACTS
   async getContacts() {
     try {
+      if (!this.db) {
+        throw new Error('Database not initialized');
+      }
+      
       const snapshot = await this.db.collection('whatsapp_contacts').get();
       const contacts = [];
       
@@ -355,6 +362,10 @@ class SimpleWhatsAppService {
   // 👥 GET ALL GROUPS
   async getGroups() {
     try {
+      if (!this.db) {
+        throw new Error('Database not initialized');
+      }
+      
       const snapshot = await this.db.collection('whatsapp_groups').get();
       const groups = [];
       
@@ -983,6 +994,14 @@ class SimpleWhatsAppService {
       this.keepAliveInterval = null;
       console.log("⏹️ Keep-alive stopped");
     }
+  }
+
+  getDatabase() {
+    if (!this.db) {
+      const { getDb } = require('../config/firebase');
+      this.db = getDb();
+    }
+    return this.db;
   }
 }
 
