@@ -305,7 +305,7 @@ class EmailService {
               </a>
             </div>
 
-            
+             
           </div>
         </div>
         <div style="background: #333; padding: 15px; text-align: center;">
