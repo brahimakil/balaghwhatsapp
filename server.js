@@ -4,9 +4,9 @@ const { Server } = require('socket.io');
 const http = require('http');
 require('dotenv').config();
 
-const whatsappRoutes = require('./routes/whatsapp');
+const whatsappRoutes = require('./routes/simpleWhatsApp'); // CHANGED
 const { initializeFirebase } = require('./config/firebase');
-const WhatsAppService = require('./services/whatsappService');
+const SimpleWhatsAppService = require('./services/simpleWhatsAppService'); // CHANGED
 const EmailService = require('./services/emailService');
 const notificationRoutes = require('./routes/notifications');
 
@@ -33,8 +33,8 @@ app.use(express.json());
 // Initialize Firebase
 initializeFirebase();
 
-// Initialize WhatsApp Service ONCE - this was the bug!
-const whatsappService = new WhatsAppService(io);
+// Initialize Simple WhatsApp Service - CHANGED
+const whatsappService = new SimpleWhatsAppService(io);
 const emailService = new EmailService();
 const NotificationEmailService = require('./services/notificationEmailService');
 const notificationEmailService = new NotificationEmailService(emailService);
@@ -56,12 +56,9 @@ app.use('/api/notifications', require('./routes/notifications'));
 
 // Health check
 app.get('/health', (req, res) => {
-  const activeClients = whatsappService.getAllSessions();
   res.json({ 
-    status: 'WhatsApp Backend is running!', 
-    timestamp: new Date(),
-    activeClients: activeClients.length,
-    sessions: activeClients
+    status: 'Simple WhatsApp Backend is running!', 
+    timestamp: new Date()
   });
 });
 
@@ -93,7 +90,7 @@ process.on('unhandledRejection', (reason, promise) => {
 // Add graceful shutdown handling
 process.on('SIGTERM', () => {
   console.log('🛑 SIGTERM received, shutting down gracefully...');
-  whatsappService.cleanup();
+  whatsappService.disconnect();
   process.exit(0);
 });
 
@@ -101,7 +98,7 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 Received SIGINT. Shutting down gracefully...');
   
   if (whatsappService) {
-    await whatsappService.shutdown();
+    await whatsappService.disconnect();
   }
   
   server.close(() => {
@@ -114,7 +111,7 @@ process.on('SIGTERM', async () => {
   console.log('\n🛑 Received SIGTERM. Shutting down gracefully...');
   
   if (whatsappService) {
-    await whatsappService.shutdown();
+    await whatsappService.disconnect();
   }
   
   server.close(() => {
@@ -150,16 +147,6 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, async () => {
-  console.log(`🚀 WhatsApp Backend running on port ${PORT}`);
+  console.log(`🚀 Simple WhatsApp Backend running on port ${PORT}`);
   console.log(`📱 Admin Panel should connect to: http://localhost:${PORT}`);
-  
-  // Restore saved sessions after server starts
-  setTimeout(async () => {
-    try {
-      await whatsappService.restoreAllSessions();
-      console.log('✅ Session restoration process completed');
-    } catch (error) {
-      console.error('❌ Error during session restoration:', error);
-    }
-  }, 3000); // Wait 3 seconds for everything to initialize
 });
