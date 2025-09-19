@@ -3,12 +3,29 @@ const router = express.Router();
 
 // Middleware to get WhatsApp service instance
 router.use((req, res, next) => {
-  const whatsappService = req.app.get('whatsappService'); // Get the single instance
+  // Change from: const whatsappService = req.app.get('whatsappService');
+  // To: Use the service attached by server.js middleware
+  const whatsappService = req.whatsappService;
+  
   if (!whatsappService) {
     return res.status(500).json({ error: 'WhatsApp service not initialized' });
   }
-  req.whatsappService = whatsappService;
+  req.whatsappService = whatsappService; // This line is now redundant but harmless
   next();
+});
+
+// Add this route at the very beginning for debugging - add after line 13
+router.get('/test', (req, res) => {
+  res.json({ 
+    message: 'WhatsApp routes are working!', 
+    timestamp: new Date().toISOString(),
+    availableRoutes: [
+      'GET /api/whatsapp/sessions',
+      'GET /api/whatsapp/whatsapp-contacts/:sessionId', 
+      'GET /api/whatsapp/whatsapp-groups/:sessionId',
+      'POST /api/whatsapp/send-bulk-chats'
+    ]
+  });
 });
 
 // Connect to WhatsApp
@@ -204,6 +221,213 @@ router.get('/debug', (req, res) => {
     
   } catch (error) {
     console.error('Debug error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all chats (contacts and groups) from WhatsApp
+router.get('/chats/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    console.log('📋 Chats request received for session:', sessionId);
+    
+    const chats = await req.whatsappService.getChats(sessionId);
+    console.log(`📋 Returning ${chats.length} chats`);
+    res.json(chats);
+    
+  } catch (error) {
+    console.error('Get chats error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get WhatsApp groups from connected client
+router.get('/whatsapp-groups/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    console.log('👥 WhatsApp groups request received for session:', sessionId);
+    
+    const groups = await req.whatsappService.getWhatsAppGroups(sessionId);
+    console.log(`👥 Returning ${groups.length} WhatsApp groups`);
+    res.json(groups);
+    
+  } catch (error) {
+    console.error('Get WhatsApp groups error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get WhatsApp contacts from connected client
+router.get('/whatsapp-contacts/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    console.log('👤 WhatsApp contacts request received for session:', sessionId);
+    
+    const contacts = await req.whatsappService.getWhatsAppContacts(sessionId);
+    console.log(`👤 Returning ${contacts.length} WhatsApp contacts`);
+    res.json(contacts);
+    
+  } catch (error) {
+    console.error('Get WhatsApp contacts error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send bulk messages to selected chats
+router.post('/send-bulk-chats', async (req, res) => {
+  try {
+    const { sessionId, message, selectedChats, delayBetweenMessages = 3, adminEmail } = req.body;
+    
+    console.log(`📤 Bulk chat message request - SessionId: ${sessionId}, Chats: ${selectedChats.length}`);
+    
+    const result = await req.whatsappService.sendBulkMessagesToChats(
+      sessionId, 
+      message,
+      selectedChats,
+      delayBetweenMessages,
+      adminEmail
+    );
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Bulk chat message error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Force refresh endpoint for testing
+router.post('/refresh/:sessionId', async (req, res) => {
+  console.log('\n🔄 Manual refresh requested');
+  try {
+    const { sessionId } = req.params;
+    
+    const chats = await req.whatsappService.getChats(sessionId);
+    console.log(`🔄 Refresh found ${chats.length} chats for session ${sessionId}`);
+    
+    res.json({ 
+      success: true,
+      message: 'Refresh completed', 
+      chatCount: chats.length,
+      sessionId: sessionId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error refreshing:', error);
+    res.status(500).json({ error: 'Failed to refresh' });
+  }
+});
+
+// Add this route for session health check
+router.get('/health/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    console.log('🏥 Session health check requested for:', sessionId);
+    
+    const health = await req.whatsappService.checkSessionHealth(sessionId);
+    res.json(health);
+    
+  } catch (error) {
+    console.error('Health check error:', error);
+    res.status(500).json({ healthy: false, error: error.message });
+  }
+});
+
+// Add this route before module.exports (around line 334)
+router.post('/destroy-session', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Session ID is required' });
+    }
+    
+    console.log(`🗑️ Destroying session: ${sessionId}`);
+    
+    // Get the client and destroy it properly
+    const client = req.whatsappService.clients.get(sessionId);
+    if (client) {
+      console.log(`🗑️ Found client for session ${sessionId}, destroying...`);
+      try {
+        await client.destroy();
+        console.log(`✅ Client destroyed for session ${sessionId}`);
+      } catch (destroyError) {
+        console.error(`❌ Error destroying client for ${sessionId}:`, destroyError);
+        // Continue anyway to clean up
+      }
+      
+      // Force remove from clients map
+      req.whatsappService.clients.delete(sessionId);
+      console.log(`🗑️ Removed session ${sessionId} from clients map. Remaining clients: ${req.whatsappService.clients.size}`);
+    } else {
+      console.log(`⚠️ No client found for session ${sessionId}`);
+    }
+    
+    // Remove session from database
+    await req.whatsappService.deleteSessionFromDB(sessionId);
+    
+    // Clear session files
+    const path = require('path');
+    const fs = require('fs');
+    const sessionPath = path.join(__dirname, '../auth_sessions', sessionId);
+    
+    if (fs.existsSync(sessionPath)) {
+      console.log(`🗑️ Removing session files at: ${sessionPath}`);
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      console.log(`✅ Session files removed for ${sessionId}`);
+    }
+    
+    console.log(`✅ Session ${sessionId} destroyed successfully`);
+    res.json({ success: true, message: 'Session destroyed successfully' });
+    
+  } catch (error) {
+    console.error('❌ Error destroying session:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add paginated endpoints
+router.get('/whatsapp-contacts-paginated/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const page = parseInt(req.query.page) || 0;
+    const pageSize = parseInt(req.query.pageSize) || 50;
+    
+    const result = await req.whatsappService.getWhatsAppContactsPaginated(sessionId, page, pageSize);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Get paginated contacts error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/whatsapp-groups-paginated/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const page = parseInt(req.query.page) || 0;
+    const pageSize = parseInt(req.query.pageSize) || 20;
+    
+    const result = await req.whatsappService.getWhatsAppGroupsPaginated(sessionId, page, pageSize);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Get paginated groups error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add search endpoint
+router.get('/whatsapp-contacts-search/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const search = req.query.search || '';
+    const limit = parseInt(req.query.limit) || 100;
+    
+    const result = await req.whatsappService.searchWhatsAppContacts(sessionId, search, limit);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Search contacts error:', error);
     res.status(500).json({ error: error.message });
   }
 });
