@@ -11,6 +11,7 @@ class SimpleWhatsAppService {
     this.client = null;
     this.db = getDb();
     this.sessionId = 'simple_session';
+    this.isConnected = false;
     
     // Create auth directory
     this.authDir = path.join(__dirname, '../auth_sessions');
@@ -24,6 +25,13 @@ class SimpleWhatsAppService {
     try {
       console.log('📱 Starting WhatsApp connection...');
       
+      if (this.client) {
+        console.log('🔄 Destroying existing client...');
+        await this.client.destroy();
+        this.client = null;
+        this.isConnected = false;
+      }
+      
       this.client = new Client({
         authStrategy: new LocalAuth({ 
           clientId: this.sessionId, 
@@ -35,7 +43,9 @@ class SimpleWhatsAppService {
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor'
           ]
         }
       });
@@ -50,13 +60,22 @@ class SimpleWhatsAppService {
       // Ready event
       this.client.on('ready', () => {
         console.log('✅ WhatsApp connected!');
+        this.isConnected = true;
         this.io.emit('whatsapp-ready');
       });
 
       // Disconnected event
-      this.client.on('disconnected', () => {
-        console.log('📱 WhatsApp disconnected');
-        this.io.emit('whatsapp-disconnected');
+      this.client.on('disconnected', (reason) => {
+        console.log('📱 WhatsApp disconnected:', reason);
+        this.isConnected = false;
+        this.io.emit('whatsapp-disconnected', { reason });
+      });
+
+      // Auth failure event
+      this.client.on('auth_failure', (msg) => {
+        console.error('❌ WhatsApp auth failed:', msg);
+        this.isConnected = false;
+        this.io.emit('whatsapp-auth-failed', { reason: msg });
       });
 
       await this.client.initialize();
@@ -64,8 +83,14 @@ class SimpleWhatsAppService {
       
     } catch (error) {
       console.error('❌ Connection error:', error);
+      this.isConnected = false;
       throw error;
     }
+  }
+
+  // ✅ Check if WhatsApp is connected
+  isWhatsAppConnected() {
+    return this.client && this.isConnected;
   }
 
   // 📇 GET ALL CONTACTS
@@ -88,19 +113,37 @@ class SimpleWhatsAppService {
   // ➕ ADD CONTACT MANUALLY
   async addContact(name, phone, email = '') {
     try {
+      // Clean phone number
+      const cleanPhone = phone.replace(/\D/g, '');
+      if (cleanPhone.length < 10) {
+        throw new Error('Phone number must be at least 10 digits');
+      }
+
       const contact = {
-        name,
-        phone,
-        email,
+        name: name.trim(),
+        phone: cleanPhone,
+        email: email.trim(),
         createdAt: admin.firestore.FieldValue.serverTimestamp()
       };
       
       const docRef = await this.db.collection('whatsapp_contacts').add(contact);
-      console.log(`✅ Contact added: ${name} (${phone})`);
+      console.log(`✅ Contact added: ${name} (${cleanPhone})`);
       
       return { success: true, id: docRef.id, ...contact };
     } catch (error) {
       console.error('❌ Error adding contact:', error);
+      throw error;
+    }
+  }
+
+  // 🗑️ DELETE CONTACT
+  async deleteContact(contactId) {
+    try {
+      await this.db.collection('whatsapp_contacts').doc(contactId).delete();
+      console.log(`✅ Contact deleted: ${contactId}`);
+      return { success: true };
+    } catch (error) {
+      console.error('❌ Error deleting contact:', error);
       throw error;
     }
   }
@@ -174,8 +217,12 @@ class SimpleWhatsAppService {
         }
       }
 
+      if (contacts.length === 0) {
+        throw new Error('No valid contacts found for group');
+      }
+
       const group = {
-        name: groupName,
+        name: groupName.trim(),
         contacts: contacts,
         createdAt: admin.firestore.FieldValue.serverTimestamp()
       };
@@ -190,11 +237,90 @@ class SimpleWhatsAppService {
     }
   }
 
+  // 🗑️ DELETE GROUP
+  async deleteGroup(groupId) {
+    try {
+      await this.db.collection('whatsapp_groups').doc(groupId).delete();
+      console.log(`✅ Group deleted: ${groupId}`);
+      return { success: true };
+    } catch (error) {
+      console.error('❌ Error deleting group:', error);
+      throw error;
+    }
+  }
+
+  // 📤 SEND MESSAGE TO SINGLE CONTACT
+  async sendToContact(contactId, message) {
+    try {
+      if (!this.isWhatsAppConnected()) {
+        throw new Error('WhatsApp is not connected. Please connect first.');
+      }
+
+      const contactDoc = await this.db.collection('whatsapp_contacts').doc(contactId).get();
+      if (!contactDoc.exists) {
+        throw new Error('Contact not found');
+      }
+
+      const contact = contactDoc.data();
+      const chatId = `${contact.phone}@c.us`;
+      
+      // Check if number is registered on WhatsApp
+      const isRegistered = await this.client.isRegisteredUser(chatId);
+      if (!isRegistered) {
+        throw new Error(`${contact.phone} is not registered on WhatsApp`);
+      }
+
+      await this.client.sendMessage(chatId, message);
+      console.log(`✅ Message sent to ${contact.name} (${contact.phone})`);
+      
+      return { success: true, contact };
+    } catch (error) {
+      console.error(`❌ Error sending to contact:`, error);
+      throw error;
+    }
+  }
+
+  // 📤 SEND MESSAGE TO MULTIPLE CONTACTS
+  async sendToContacts(contactIds, message) {
+    try {
+      if (!this.isWhatsAppConnected()) {
+        throw new Error('WhatsApp is not connected. Please connect first.');
+      }
+
+      const results = { success: [], failed: [] };
+
+      for (const contactId of contactIds) {
+        try {
+          const result = await this.sendToContact(contactId, message);
+          results.success.push(result.contact);
+          
+          // Delay between messages to avoid spam detection
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (error) {
+          const contactDoc = await this.db.collection('whatsapp_contacts').doc(contactId).get();
+          const contactName = contactDoc.exists ? contactDoc.data().name : 'Unknown';
+          
+          console.error(`❌ Failed to send to ${contactName}:`, error.message);
+          results.failed.push({ 
+            contactId, 
+            name: contactName, 
+            error: error.message 
+          });
+        }
+      }
+
+      return results;
+    } catch (error) {
+      console.error('❌ Error sending to contacts:', error);
+      throw error;
+    }
+  }
+
   // 📤 SEND MESSAGE TO GROUP
   async sendToGroup(groupId, message) {
     try {
-      if (!this.client) {
-        throw new Error('WhatsApp not connected');
+      if (!this.isWhatsAppConnected()) {
+        throw new Error('WhatsApp is not connected. Please connect first.');
       }
 
       const groupDoc = await this.db.collection('whatsapp_groups').doc(groupId).get();
@@ -208,6 +334,14 @@ class SimpleWhatsAppService {
       for (const contact of group.contacts) {
         try {
           const chatId = `${contact.phone}@c.us`;
+          
+          // Check if number is registered
+          const isRegistered = await this.client.isRegisteredUser(chatId);
+          if (!isRegistered) {
+            results.failed.push({ contact, error: 'Not registered on WhatsApp' });
+            continue;
+          }
+          
           await this.client.sendMessage(chatId, message);
           results.success.push(contact);
           console.log(`✅ Sent to ${contact.name}`);
@@ -223,6 +357,48 @@ class SimpleWhatsAppService {
       return results;
     } catch (error) {
       console.error('❌ Error sending to group:', error);
+      throw error;
+    }
+  }
+
+  // 📤 SEND MESSAGE TO MIXED SELECTION (contacts + groups)
+  async sendToSelection(contactIds, groupIds, message) {
+    try {
+      if (!this.isWhatsAppConnected()) {
+        throw new Error('WhatsApp is not connected. Please connect first.');
+      }
+
+      const results = { 
+        contactResults: { success: [], failed: [] },
+        groupResults: { success: [], failed: [] }
+      };
+
+      // Send to individual contacts
+      if (contactIds && contactIds.length > 0) {
+        results.contactResults = await this.sendToContacts(contactIds, message);
+      }
+
+      // Send to groups
+      if (groupIds && groupIds.length > 0) {
+        for (const groupId of groupIds) {
+          try {
+            const groupResult = await this.sendToGroup(groupId, message);
+            results.groupResults.success.push({
+              groupId,
+              contactResults: groupResult
+            });
+          } catch (error) {
+            results.groupResults.failed.push({
+              groupId,
+              error: error.message
+            });
+          }
+        }
+      }
+
+      return results;
+    } catch (error) {
+      console.error('❌ Error sending to selection:', error);
       throw error;
     }
   }
@@ -256,6 +432,7 @@ class SimpleWhatsAppService {
         await this.client.destroy();
         this.client = null;
       }
+      this.isConnected = false;
       console.log('✅ WhatsApp disconnected');
     } catch (error) {
       console.error('❌ Disconnect error:', error);

@@ -21,6 +21,16 @@ router.post('/disconnect', async (req, res) => {
   }
 });
 
+// ✅ CHECK CONNECTION STATUS
+router.get('/status', (req, res) => {
+  try {
+    const isConnected = req.whatsappService.isWhatsAppConnected();
+    res.json({ connected: isConnected });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 📇 GET CONTACTS
 router.get('/contacts', async (req, res) => {
   try {
@@ -36,6 +46,17 @@ router.post('/contacts', async (req, res) => {
   try {
     const { name, phone, email } = req.body;
     const result = await req.whatsappService.addContact(name, phone, email);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🗑️ DELETE CONTACT
+router.delete('/contacts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await req.whatsappService.deleteContact(id);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -86,12 +107,57 @@ router.post('/groups', async (req, res) => {
   }
 });
 
-// 📤 SEND TO GROUP
-router.post('/groups/:groupId/send', async (req, res) => {
+// 🗑️ DELETE GROUP
+router.delete('/groups/:id', async (req, res) => {
   try {
-    const { groupId } = req.params;
+    const { id } = req.params;
+    const result = await req.whatsappService.deleteGroup(id);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📤 SEND TO SINGLE CONTACT
+router.post('/send/contact/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
     const { message } = req.body;
-    const result = await req.whatsappService.sendToGroup(groupId, message);
+    const result = await req.whatsappService.sendToContact(id, message);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📤 SEND TO MULTIPLE CONTACTS
+router.post('/send/contacts', async (req, res) => {
+  try {
+    const { contactIds, message } = req.body;
+    const result = await req.whatsappService.sendToContacts(contactIds, message);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📤 SEND TO GROUP
+router.post('/send/group/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+    const result = await req.whatsappService.sendToGroup(id, message);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📤 SEND TO MIXED SELECTION (contacts + groups)
+router.post('/send/selection', async (req, res) => {
+  try {
+    const { contactIds, groupIds, message } = req.body;
+    const result = await req.whatsappService.sendToSelection(contactIds, groupIds, message);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
