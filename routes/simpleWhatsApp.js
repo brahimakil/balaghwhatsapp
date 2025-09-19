@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 
+const ContentSharingService = require('../services/contentSharingService');
+// Remove this line: const contentSharingService = new ContentSharingService();
+
 // 🔗 CONNECT WHATSAPP
 router.post('/connect', async (req, res) => {
   try {
@@ -86,6 +89,36 @@ router.get('/contacts/export', async (req, res) => {
   }
 });
 
+// 🔄 FORCE RESYNC CONTACTS
+router.post('/contacts/resync', async (req, res) => {
+  try {
+    const result = await req.whatsappService.resyncContacts();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🚪 LOGOUT (complete session removal)
+router.post('/logout', async (req, res) => {
+  try {
+    await req.whatsappService.logout();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🗑️ CLEAR ALL SYNCED CONTACTS
+router.post('/contacts/clear-synced', async (req, res) => {
+  try {
+    const result = await req.whatsappService.clearAllSyncedContacts();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 👥 GET GROUPS
 router.get('/groups', async (req, res) => {
   try {
@@ -99,8 +132,13 @@ router.get('/groups', async (req, res) => {
 // ➕ CREATE GROUP
 router.post('/groups', async (req, res) => {
   try {
-    const { groupName, contactIds } = req.body;
-    const result = await req.whatsappService.createGroup(groupName, contactIds);
+    const { name, contactIds } = req.body;
+    
+    if (!name || !contactIds || contactIds.length === 0) {
+      return res.status(400).json({ error: 'Group name and contacts are required' });
+    }
+    
+    const result = await req.whatsappService.createGroup(name, contactIds);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -159,6 +197,45 @@ router.post('/send/selection', async (req, res) => {
     const { contactIds, groupIds, message } = req.body;
     const result = await req.whatsappService.sendToSelection(contactIds, groupIds, message);
     res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📊 GET ALL CONTENT FOR SHARING
+router.get('/content', async (req, res) => {
+  try {
+    const contentSharingService = new ContentSharingService(); // Create here
+    const content = await contentSharingService.getAllContent();
+    res.json(content);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 📤 SHARE SELECTED CONTENT
+router.post('/share', async (req, res) => {
+  try {
+    const { selectedContent, contactIds = [], groupIds = [], delaySeconds = 5 } = req.body;
+    
+    if (!selectedContent || selectedContent.length === 0) {
+      return res.status(400).json({ error: 'Please select content to share' });
+    }
+
+    if (contactIds.length === 0 && groupIds.length === 0) {
+      return res.status(400).json({ error: 'Please select contacts or groups to share with' });
+    }
+
+    const contentSharingService = new ContentSharingService(); // Create here
+    const results = await contentSharingService.shareContent(
+      req.whatsappService,
+      selectedContent,
+      contactIds,
+      groupIds,
+      delaySeconds
+    );
+
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

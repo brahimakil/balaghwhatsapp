@@ -29,7 +29,8 @@ const io = new Server(server, {
 // Middleware
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.options('*', cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // Increased from default
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Initialize Firebase
 initializeFirebase();
 
