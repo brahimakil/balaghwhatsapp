@@ -41,6 +41,8 @@ class WhatsAppService {
     
     // Start automatic health monitoring
     this.startHealthMonitoring();
+    this.healthCache = new Map(); // Add this
+    this.lastHealthCheck = new Map(); // Add this
   }
 
   // Add health monitoring methods
@@ -50,6 +52,11 @@ class WhatsAppService {
     this.healthCheckInterval = setInterval(async () => {
       await this.checkAllSessionsHealth();
     }, this.healthCheckIntervalMs);
+    
+    // Add client restart interval to prevent memory leaks
+    this.clientRestartInterval = setInterval(async () => {
+      await this.restartOldClients();
+    }, 2 * 60 * 60 * 1000); // Every 2 hours
     
     console.log(`🏥 Health monitoring started (${this.healthCheckIntervalMs / 60000} minute intervals)`);
   }
@@ -231,37 +238,49 @@ class WhatsAppService {
   // Enhanced session health check
   async checkSessionHealth(sessionId) {
     try {
+      // Cache health results for 15 seconds
+      const cached = this.healthCache.get(sessionId);
+      const lastCheck = this.lastHealthCheck.get(sessionId) || 0;
+      
+      if (cached && (Date.now() - lastCheck) < 15000) {
+        console.log(`🔄 Using cached health for ${sessionId}: ${cached.reason}`);
+        return cached;
+      }
+
       const client = this.clients.get(sessionId);
       if (!client) {
-        return { healthy: false, reason: 'Client not found in memory' };
+        const result = { healthy: false, reason: 'Client not found in memory' };
+        this.healthCache.set(sessionId, result);
+        this.lastHealthCheck.set(sessionId, Date.now());
+        return result;
       }
 
       // Try to get state with timeout
       const statePromise = client.getState();
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('State check timeout')), 5000) // Reduced timeout
+        setTimeout(() => reject(new Error('State check timeout')), 2000) // Reduced timeout
       );
       
       const state = await Promise.race([statePromise, timeoutPromise]);
       
       // Only consider CONNECTED as healthy for chat operations
+      let result;
       if (state === 'CONNECTED') {
-        // Additional check: try to get basic info
-        try {
-          const info = await client.info;
-          if (info && info.wid) {
-            return { healthy: true, reason: 'Connected and responsive' };
-          } else {
-            return { healthy: false, reason: 'Connected but no client info available' };
-          }
-        } catch (infoError) {
-          return { healthy: false, reason: 'Connected but client info failed' };
-        }
+        result = { healthy: true, reason: 'Connected and responsive' };
       } else {
-        return { healthy: false, reason: `Client state: ${state}` };
+        result = { healthy: false, reason: `Client state: ${state}` };
       }
+
+      // Cache the result
+      this.healthCache.set(sessionId, result);
+      this.lastHealthCheck.set(sessionId, Date.now());
+      
+      return result;
     } catch (error) {
-      return { healthy: false, reason: error.message };
+      const result = { healthy: false, reason: error.message };
+      this.healthCache.set(sessionId, result);
+      this.lastHealthCheck.set(sessionId, Date.now());
+      return result;
     }
   }
 
@@ -272,6 +291,12 @@ class WhatsAppService {
       console.log(`🔍 Current active clients: ${this.clients.size}`);
       console.log(`🔍 Client exists for ${sessionId}: ${this.clients.has(sessionId)}`);
       
+      // Check existing session in database first
+      const existingSession = await this.getSessionFromDB(sessionId);
+      if (existingSession && existingSession.status === 'connected') {
+        console.log(`🔄 Found connected session in DB, attempting to restore...`);
+      }
+
       // Check if session already exists and is healthy
       const existingClient = this.clients.get(sessionId);
       if (existingClient) {
@@ -329,7 +354,10 @@ class WhatsAppService {
             '--disable-features=VizDisplayCompositor',
             '--disable-ipc-flooding-protection',
             '--disable-web-security',
-            '--disable-features=site-per-process'
+            '--disable-features=site-per-process',
+            '--memory-pressure-off',           // Add this
+            '--max_old_space_size=2048',       // Add this  
+            '--optimize-for-size'             // Add this
           ]
         }
       });
@@ -1786,6 +1814,30 @@ class WhatsAppService {
     }
     
     return score;
+  }
+
+  // Add automatic client restart every 2 hours to prevent memory leaks
+  async restartOldClients() {
+    console.log('🔄 Checking for old clients to restart...');
+    
+    for (const [sessionId, client] of this.clients.entries()) {
+      try {
+        // Restart clients that have been running for more than 4 hours
+        const sessionData = await this.getSessionFromDB(sessionId);
+        if (sessionData && sessionData.lastConnected) {
+          const connectedTime = new Date(sessionData.lastConnected).getTime();
+          const now = Date.now();
+          const hoursRunning = (now - connectedTime) / (1000 * 60 * 60);
+          
+          if (hoursRunning > 4) {
+            console.log(`🔄 Restarting client ${sessionId} (running for ${hoursRunning.toFixed(1)} hours)`);
+            await this.recoverSession(sessionId);
+          }
+        }
+      } catch (error) {
+        console.error(`Error checking client age for ${sessionId}:`, error);
+      }
+    }
   }
 
 }

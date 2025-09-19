@@ -123,6 +123,31 @@ process.on('SIGTERM', async () => {
   });
 });
 
+// Add this at the end of server.js to handle memory issues
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  console.log('🔄 Server will restart...');
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  console.log('🔄 Server will restart...');
+  process.exit(1);
+});
+
+// Add memory monitoring
+setInterval(() => {
+  const used = process.memoryUsage();
+  console.log(`💾 Memory Usage: ${Math.round(used.rss / 1024 / 1024)} MB`);
+  
+  // If using more than 6GB, restart
+  if (used.rss > 6 * 1024 * 1024 * 1024) {
+    console.log('⚠️ High memory usage detected, restarting...');
+    process.exit(1);
+  }
+}, 60000); // Check every minute
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, async () => {
   console.log(`🚀 WhatsApp Backend running on port ${PORT}`);
