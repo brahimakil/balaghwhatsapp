@@ -16,7 +16,14 @@ class SimpleWhatsAppService {
     this.contactsSynced = false;
     
     // Initialize database immediately
-    this.initializeDatabase();
+    try {
+      const { getDb } = require('../config/firebase');
+      this.db = getDb();
+      console.log('✅ Database initialized in WhatsApp service');
+    } catch (error) {
+      console.error('❌ Failed to initialize database:', error);
+      this.db = null;
+    }
     
     // Create auth directory
     this.authDir = path.join(__dirname, '../auth_sessions');
