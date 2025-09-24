@@ -157,10 +157,21 @@ router.post('/send-emails', async (req, res) => {
       performedBy: notification.performedBy
     });
 
+    // NEW: Honor explicit recipients and role/village hints
+    const { recipients, recipientsOnly, performerRole, performerVillageId } = req.body;
+    const { mode } = req.query;
+    const options = {
+      recipients: Array.isArray(recipients) ? recipients : undefined,
+      recipientsOnly: recipientsOnly === true || mode === 'explicit',
+      performerRole: performerRole || notification.performerRole,
+      performerVillageId: performerVillageId || notification.villageId
+    };
+
     // Use the notification email service to send emails
     const results = await req.app.locals.notificationEmailService.sendNotificationEmails(
       notification,
-      notificationId
+      notificationId,
+      options
     );
 
     console.log('✅ Email notification results:', results);

@@ -6,11 +6,11 @@ class NotificationEmailService {
     this.db = getDb();
   }
 
-  async sendNotificationEmails(notification) {
+  async sendNotificationEmails(notification, notificationId = null, options = {}) {
     try {
       console.log('🔔 Processing notification for email automation:', notification);
       
-      // Get all users to determine who should receive emails
+      // Get all users (used for role/village filtering and to resolve names)
       const usersSnapshot = await this.db.collection('users').get();
       const allUsers = usersSnapshot.docs.map(doc => ({
         id: doc.id,
@@ -19,53 +19,137 @@ class NotificationEmailService {
 
       const emailPromises = [];
 
-      for (const user of allUsers) {
-        try {
-          const shouldReceiveEmail = this.shouldUserReceiveNotificationEmail(user, notification);
-          
-          if (shouldReceiveEmail) {
-            console.log(`📧 Sending notification email to ${user.role}: ${user.email}`);
-            
-            const emailPromise = this.emailService.sendNotificationEmailToUser(
-              user.email,
-              notification,
-              this.getUserRoleForEmail(user),
-              user.name
-            ).catch(error => {
-              console.error(`❌ Failed to send email to ${user.email}:`, error.message);
-              return { success: false, email: user.email, error: error.message };
-            });
-            
-            emailPromises.push(emailPromise);
-          }
-        } catch (error) {
-          console.error(`❌ Error processing user ${user.email}:`, error.message);
+      // Helper to send to a normalized recipient list [{ email, name, role, assignedVillageId? }]
+      const sendToList = async (recipientsList) => {
+        if (!recipientsList || recipientsList.length === 0) {
+          console.log('📭 No users need to receive email for this notification');
+          return { successful: 0, failed: 0, total: 0 };
         }
-      }
 
-      if (emailPromises.length > 0) {
-        console.log(`📬 Sending ${emailPromises.length} notification emails...`);
+        console.log(`📬 Sending ${recipientsList.length} notification emails...`);
         const results = [];
-        for (let i = 0; i < emailPromises.length; i++) {
-          console.log(`📧 Sending email ${i + 1}/${emailPromises.length}...`);
-          const result = await emailPromises[i];
-          results.push(result);
-          
-          // Add 2 second delay between emails to avoid rate limiting
-          if (i < emailPromises.length - 1) {
+        for (let i = 0; i < recipientsList.length; i++) {
+          const r = recipientsList[i];
+          const roleForEmail = (r.role === 'secondary' && r.assignedVillageId) ? 'secondary_with_village' : (r.role || 'user');
+
+          console.log(`📧 Sending email ${i + 1}/${recipientsList.length}...`);
+          try {
+            const result = await this.emailService.sendNotificationEmailToUser(
+              r.email,
+              notification,
+              roleForEmail,
+              r.name
+            );
+            results.push(result);
+          } catch (error) {
+            console.error(`❌ Failed to send email to ${r.email}:`, error.message);
+            results.push({ success: false, email: r.email, error: error.message });
+          }
+
+          // Rate limiting delay
+          if (i < recipientsList.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
-        
-        const successful = results.filter(r => r.success).length;
-        const failed = results.filter(r => !r.success).length;
-        
+
+        const successful = results.filter(r => r && r.success).length;
+        const failed = results.filter(r => !r || !r.success).length;
         console.log(`✅ Email automation completed: ${successful} sent, ${failed} failed`);
-        return { successful, failed, total: emailPromises.length };
-      } else {
-        console.log('📭 No users need to receive email for this notification');
-        return { successful: 0, failed: 0, total: 0 };
+        return { successful, failed, total: recipientsList.length };
+      };
+
+      // 1) If explicit recipients are requested, honor them and do not compute server-side
+      const useExplicit = options && options.recipientsOnly === true && Array.isArray(options.recipients) && options.recipients.length > 0;
+      if (useExplicit) {
+        const allowSet = new Set(
+          options.recipients
+            .map(e => (e || '').toLowerCase().trim())
+            .filter(Boolean)
+        );
+
+        // Build list from known users
+        const matchedUsers = allUsers.filter(u => u.email && allowSet.has(u.email.toLowerCase().trim()));
+
+        // Include unknown emails (not present in users collection)
+        const knownEmails = new Set(matchedUsers.map(u => u.email.toLowerCase().trim()));
+        const unknownEmails = [...allowSet].filter(e => !knownEmails.has(e));
+
+        // Remove performer if present
+        const performerEmail = (notification.performedBy || '').toLowerCase().trim();
+        const finalList = [
+          ...matchedUsers
+            .filter(u => u.email.toLowerCase().trim() !== performerEmail)
+            .map(u => ({ email: u.email, name: u.name, role: u.role, assignedVillageId: u.assignedVillageId })),
+          ...unknownEmails
+            .filter(e => e !== performerEmail)
+            .map(email => ({ email, name: undefined, role: 'user' }))
+        ];
+
+        // Deduplicate
+        const uniqueByEmail = new Map();
+        for (const r of finalList) {
+          const key = r.email.toLowerCase().trim();
+          if (!uniqueByEmail.has(key)) uniqueByEmail.set(key, r);
+        }
+
+        return await sendToList(Array.from(uniqueByEmail.values()));
       }
+
+      // 2) Server-side computation per new role/village rules
+      const performer =
+        allUsers.find(u => (u.email || '').toLowerCase().trim() === (notification.performedBy || '').toLowerCase().trim()) || null;
+      const performerRole = options.performerRole || notification.performerRole || performer?.role;
+      const performerVillageId = options.performerVillageId || notification.villageId || performer?.assignedVillageId;
+
+      let recipients = [];
+
+      if (performerRole === 'main') {
+        // Main admin -> send to no one
+        recipients = [];
+      } else if (performerRole === 'secondary') {
+        if (performerVillageId) {
+          // Secondary with village -> ONLY village editors in same village
+          recipients = allUsers.filter(
+            u => u.role === 'village_editor' &&
+                 u.assignedVillageId === performerVillageId
+          );
+        } else {
+          recipients = [];
+        }
+      } else if (performerRole === 'village_editor') {
+        if (performerVillageId) {
+          // Village editor -> ONLY secondary admins in same village
+          recipients = allUsers.filter(
+            u => u.role === 'secondary' &&
+                 u.assignedVillageId === performerVillageId
+          );
+        } else {
+          recipients = [];
+        }
+      } else {
+        // Unknown performer role -> safest is send to no one
+        recipients = [];
+      }
+
+      // Remove performer and invalid emails
+      const performerEmail = (notification.performedBy || '').toLowerCase().trim();
+      const dedup = new Map();
+      for (const u of recipients) {
+        if (!u.email) continue;
+        const emailLower = u.email.toLowerCase().trim();
+        if (emailLower === performerEmail) continue;
+        if (!dedup.has(emailLower)) {
+          dedup.set(emailLower, {
+            email: u.email,
+            name: u.name,
+            role: u.role,
+            assignedVillageId: u.assignedVillageId
+          });
+        }
+      }
+
+      const finalRecipients = Array.from(dedup.values());
+      return await sendToList(finalRecipients);
 
     } catch (error) {
       console.error('❌ Error in notification email automation:', error);
