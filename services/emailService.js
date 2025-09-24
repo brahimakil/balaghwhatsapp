@@ -49,6 +49,39 @@ class EmailService {
     }
   }
 
+  // Add this method INSIDE the class
+  async sendMailWithFallback(mailOptions) {
+    // First try current transporter (SSL 465)
+    try {
+      return await this.transporter.sendMail(mailOptions);
+    } catch (error) {
+      const code = error && error.code ? error.code : 'UNKNOWN';
+      const cmd = error && error.command ? error.command : 'UNKNOWN';
+      const opts = this.transporter?.options || {};
+
+      // If connection timed out on 465, retry once on 587 STARTTLS
+      const isConnIssue = code === 'ETIMEDOUT' || code === 'ECONNECTION' || code === 'ESOCKET' || cmd === 'CONN';
+      if (isConnIssue && opts.port === 465 && opts.secure === true) {
+        console.log('↪️ Connection to 465 timed out. Retrying with STARTTLS on 587...');
+        const fallbackTransporter = nodemailer.createTransport({
+          host: opts.host || 'smtp.gmail.com',
+          port: 587,
+          secure: false, // STARTTLS
+          auth: {
+            user: process.env.SUPPORT_EMAIL,
+            pass: process.env.SUPPORT_EMAIL_PASSWORD
+          },
+          tls: { rejectUnauthorized: false }
+        });
+
+        return await fallbackTransporter.sendMail(mailOptions);
+      }
+
+      // Not a connection issue or already on 587 → rethrow
+      throw error;
+    }
+  }
+
   async testConnection() {
     if (!this.initialized) {
       throw new Error('Email service not initialized. Check environment variables.');
@@ -106,13 +139,15 @@ class EmailService {
         `
       };
 
-      const result = await this.sendWithAutoFallback(mailOptions);
+      const result = await this.sendMailWithFallback(mailOptions);
       console.log('✅ Test email sent successfully:', result.messageId);
+      
       return {
         success: true,
         messageId: result.messageId,
         message: `Test email sent successfully to ${toEmail}`
       };
+
     } catch (error) {
       console.error('❌ Error sending test email:', error);
       throw new Error(`Failed to send test email: ${error.message}`);
@@ -126,6 +161,7 @@ class EmailService {
 
     try {
       console.log(`📧 Sending notification email to: ${toEmail}`);
+
       const mailOptions = {
         from: `"Balagh Notifications" <${this.fromEmail}>`,
         to: toEmail,
@@ -133,13 +169,15 @@ class EmailService {
         html: this.generateNotificationEmailTemplate(notification)
       };
 
-      const result = await this.sendWithAutoFallback(mailOptions);
+      const result = await this.sendMailWithFallback(mailOptions);
       console.log('✅ Notification email sent successfully:', result.messageId);
+      
       return {
         success: true,
         messageId: result.messageId,
         message: `Notification email sent successfully to ${toEmail}`
       };
+
     } catch (error) {
       console.error('❌ Error sending notification email:', error);
       throw new Error(`Failed to send notification email: ${error.message}`);
@@ -153,6 +191,7 @@ class EmailService {
 
     try {
       console.log(`📧 Sending notification email to ${recipientRole}: ${userEmail}`);
+
       const mailOptions = {
         from: `"Balagh Notifications" <${this.fromEmail}>`,
         to: userEmail,
@@ -160,13 +199,15 @@ class EmailService {
         html: this.generateUserNotificationEmailTemplate(notification, recipientRole, recipientName)
       };
 
-      const result = await this.sendWithAutoFallback(mailOptions);
+      const result = await this.sendMailWithFallback(mailOptions);
       console.log('✅ Notification email sent successfully:', result.messageId);
+      
       return {
         success: true,
         messageId: result.messageId,
         message: `Notification email sent successfully to ${userEmail}`
       };
+
     } catch (error) {
       console.error('❌ Error sending notification email:', error);
       throw new Error(`Failed to send notification email: ${error.message}`);
@@ -311,41 +352,3 @@ class EmailService {
 }
 
 module.exports = EmailService;
-
-
-  // Auto-fallback to STARTTLS:587 if SSL:465 times out at connection stage
-  async sendWithAutoFallback(mailOptions) {
-    try {
-      return await this.transporter.sendMail(mailOptions);
-    } catch (error) {
-      const code = error && error.code ? error.code : 'UNKNOWN';
-      const cmd = error && error.command ? error.command : 'UNKNOWN';
-      console.warn(`⚠️ SMTP send failed (code=${code}, cmd=${cmd}).`);
-
-      const currentPort = this.transporter?.options?.port;
-      const currentSecure = this.transporter?.options?.secure;
-
-      // Only fallback when the problem is connection timeout/conn error on 465
-      const isConnIssue = code === 'ETIMEDOUT' || code === 'ECONNECTION' || code === 'ESOCKET' || cmd === 'CONN';
-      if (isConnIssue && currentPort === 465 && currentSecure === true) {
-        console.log('↪️ Retrying with STARTTLS on port 587...');
-        this.transporter = require('nodemailer').createTransport({
-          host: 'smtp.gmail.com',
-          port: 587,
-          secure: false, // STARTTLS
-          auth: {
-            user: process.env.SUPPORT_EMAIL,
-            pass: process.env.SUPPORT_EMAIL_PASSWORD
-          },
-          tls: { rejectUnauthorized: false }
-        });
-
-        // One retry with 587
-        return await this.transporter.sendMail(mailOptions);
-      }
-
-      // If not a connection issue or already on 587, rethrow
-      throw error;
-    }
-  }
-}
