@@ -4,11 +4,9 @@ const { Server } = require('socket.io');
 const http = require('http');
 require('dotenv').config();
 
-const whatsappRoutes = require('./routes/simpleWhatsApp'); // CHANGED
+const whatsappRoutes = require('./routes/simpleWhatsApp');
 const { initializeFirebase } = require('./config/firebase');
-const SimpleWhatsAppService = require('./services/simpleWhatsAppService'); // CHANGED
-const EmailService = require('./services/emailService');
-const notificationRoutes = require('./routes/notifications');
+const SimpleWhatsAppService = require('./services/simpleWhatsAppService');
 
 const app = express();
 const server = http.createServer(app);
@@ -29,31 +27,23 @@ const io = new Server(server, {
 // Middleware
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.options('*', cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json({ limit: '50mb' })); // Increased from default
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
 // Initialize Firebase
 initializeFirebase();
 
-// Initialize Simple WhatsApp Service - CHANGED
+// Initialize Simple WhatsApp Service
 const whatsappService = new SimpleWhatsAppService(io);
-const emailService = new EmailService();
-const NotificationEmailService = require('./services/notificationEmailService');
-const notificationEmailService = new NotificationEmailService(emailService);
 
 // Add services to request object
 app.use((req, res, next) => {
   req.whatsappService = whatsappService;
-  req.emailService = emailService;
   next();
 });
 
-// Add notification email service to app.locals
-app.locals.notificationEmailService = notificationEmailService;
-
-// Routes
+// Routes - ONLY WhatsApp routes now
 app.use('/api/whatsapp', whatsappRoutes);
-app.use('/api/email', require('./routes/email'));
-app.use('/api/notifications', require('./routes/notifications'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -72,26 +62,24 @@ io.on('connection', (socket) => {
   });
 });
 
-// Add these error handlers at the end of your server.js file, before server.listen()
-
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
   console.error('Stack:', error.stack);
-  // Don't exit the process, just log the error
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise);
   console.error('Reason:', reason);
-  // Don't exit the process, just log the error
 });
 
 // Add graceful shutdown handling
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('🛑 SIGTERM received, shutting down gracefully...');
-  whatsappService.disconnect();
+  if (whatsappService) {
+    await whatsappService.disconnect();
+  }
   process.exit(0);
 });
 
@@ -106,32 +94,6 @@ process.on('SIGINT', async () => {
     console.log('✅ Server closed');
     process.exit(0);
   });
-});
-
-process.on('SIGTERM', async () => {
-  console.log('\n🛑 Received SIGTERM. Shutting down gracefully...');
-  
-  if (whatsappService) {
-    await whatsappService.disconnect();
-  }
-  
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-// Add this at the end of server.js to handle memory issues
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  console.log('🔄 Server will restart...');
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  console.log('🔄 Server will restart...');
-  process.exit(1);
 });
 
 // Add memory monitoring
