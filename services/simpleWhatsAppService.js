@@ -15,6 +15,12 @@ class SimpleWhatsAppService {
     this.keepAliveInterval = null;
     this.contactsSynced = false;
     
+    // ✅ ADD: Reconnection management
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 3;
+    this.reconnectCooldown = false;
+    this.isConnecting = false; // Prevent multiple simultaneous connections
+    
     // Initialize database immediately
     try {
       const { getDb } = require('../config/firebase');
@@ -56,15 +62,32 @@ class SimpleWhatsAppService {
   // 🔗 CONNECT (with auto-restore support)
   async connect(isRestore = false) {
     try {
+      // ✅ Prevent multiple simultaneous connection attempts
+      if (this.isConnecting) {
+        console.log('⚠️ Connection already in progress, skipping...');
+        return { success: false, message: 'Connection already in progress' };
+      }
+
+      // ✅ Check reconnection cooldown
+      if (this.reconnectCooldown) {
+        console.log('⏸️ In reconnection cooldown period, please wait...');
+        return { success: false, message: 'Please wait before reconnecting' };
+      }
+
+      this.isConnecting = true;
       console.log(`🔗 ${isRestore ? 'Restoring' : 'Creating new'} WhatsApp connection...`);
       
       if (this.client) {
         console.log('🔄 Destroying existing client...');
         try {
-        await this.client.destroy();
-    } catch (error) {
+          await Promise.race([
+            this.client.destroy(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Destroy timeout')), 5000))
+          ]);
+        } catch (error) {
           console.log(`⚠️ Error destroying existing client: ${error.message}`);
         }
+        this.client = null;
       }
 
       const { Client, LocalAuth } = require('whatsapp-web.js');
@@ -82,12 +105,14 @@ class SimpleWhatsAppService {
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--disable-web-security',
-            '--disable-features=VizDisplayCompositor'
+            '--disable-features=VizDisplayCompositor',
+            '--single-process', // ✅ ADD: Run in single process mode
+            '--no-zygote' // ✅ ADD: Prevent zombie processes
           ]
         }
       });
 
-      // QR Code event (only for new connections)
+      // QR Code event
       this.client.on('qr', async (qr) => {
         if (!isRestore) {
           console.log('📋 QR Code generated');
@@ -100,27 +125,26 @@ class SimpleWhatsAppService {
       this.client.on('ready', async () => {
         console.log('✅ WhatsApp connected!');
         this.isConnected = true;
+        this.isConnecting = false;
+        this.reconnectAttempts = 0; // ✅ Reset counter on successful connection
         
-        // Save session to Firebase
         await this.saveSessionToFirebase();
-        
-        // Start keep-alive ping
         this.startKeepAlive();
-        
         this.io.emit('whatsapp-ready');
       });
 
-      // Disconnected event
+      // Disconnected event - DON'T auto-reconnect
       this.client.on('disconnected', async (reason) => {
         console.log('📱 WhatsApp disconnected:', reason);
         this.isConnected = false;
+        this.isConnecting = false;
         
-        // Update session status in Firebase
         await this.updateSessionStatus('disconnected', reason);
         
+        // ✅ DON'T set requiresReconnection to true - let user reconnect manually
         this.io.emit('whatsapp-disconnected', { 
           reason,
-          requiresReconnection: true 
+          requiresReconnection: false // ✅ Changed to false
         });
       });
 
@@ -128,27 +152,50 @@ class SimpleWhatsAppService {
       this.client.on('auth_failure', async (msg) => {
         console.error('❌ WhatsApp auth failed:', msg);
         this.isConnected = false;
+        this.isConnecting = false;
         
-        // Clear saved session
         await this.clearSessionFromFirebase();
         
         this.io.emit('whatsapp-auth-failed', { 
           reason: msg,
-          requiresReconnection: true 
+          requiresReconnection: false // ✅ Changed to false
         });
       });
 
-      await this.client.initialize();
+      // ✅ ADD: Set timeout for initialization
+      await Promise.race([
+        this.client.initialize(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Connection timeout after 60 seconds')), 60000)
+        )
+      ]);
+
       return { success: true };
       
     } catch (error) {
       console.error('❌ Connection error:', error);
       this.isConnected = false;
+      this.isConnecting = false;
       
-      // If connection fails, emit event requiring reconnection
+      // ✅ Increment reconnection attempts
+      this.reconnectAttempts++;
+      
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        console.log(`⛔ Max reconnection attempts (${this.maxReconnectAttempts}) reached`);
+        
+        // ✅ Set cooldown period
+        this.reconnectCooldown = true;
+        setTimeout(() => {
+          console.log('✅ Reconnection cooldown ended');
+          this.reconnectCooldown = false;
+          this.reconnectAttempts = 0; // Reset counter
+        }, 60000); // 1 minute cooldown
+      }
+      
       this.io.emit('whatsapp-disconnected', { 
         reason: error.message,
-        requiresReconnection: true 
+        requiresReconnection: false, // ✅ Manual reconnection only
+        attemptsRemaining: this.maxReconnectAttempts - this.reconnectAttempts
       });
       
       throw error;
@@ -526,36 +573,30 @@ class SimpleWhatsAppService {
   // 🔄 HANDLE CONNECTION ERRORS
   async handleConnectionError() {
     try {
-      console.log(`🚨 Connection error detected! Disconnecting and preparing for reconnection...`);
+      console.log(`🚨 Connection error detected! Disconnecting...`);
       
-      // Mark as disconnected
       this.isConnected = false;
-      
-      // Stop keep-alive
+      this.isConnecting = false;
       this.stopKeepAlive();
       
-      // Emit disconnection event
       this.io.emit('whatsapp-disconnected', { 
-        reason: 'Connection error - please reconnect',
-        requiresReconnection: true 
+        reason: 'Connection lost',
+        requiresReconnection: false // ✅ Manual reconnection only
       });
       
-      // Try to disconnect cleanly
       try {
         if (this.client) {
-          await this.client.destroy();
+          await Promise.race([
+            this.client.destroy(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Destroy timeout')), 5000))
+          ]);
         }
       } catch (destroyError) {
         console.log(`⚠️ Error during client destruction: ${destroyError.message}`);
       }
       
-      // Clear the client
       this.client = null;
-      
-      // Clear session from Firebase
-      await this.clearSessionFromFirebase();
-      
-      console.log(`✅ Disconnection complete. Ready for reconnection.`);
+      console.log(`✅ Disconnection complete. Please reconnect manually.`);
       
     } catch (error) {
       console.error(`❌ Error handling connection error:`, error);
